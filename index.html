@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ant Generator - Large World, Nest & Mini-Map</title>
+  <style>
+    /* Basic Page Reset */
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #1a1a1a;
+      font-family: monospace;
+      color: #fff;
+      overflow: auto; /* we still allow scrolling for the large container */
+    }
+
+    /* Control Panel (fixed) */
+    #controlPanel {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.6);
+      padding: 12px;
+      border: 1px solid #888;
+      border-radius: 6px;
+      z-index: 9999;
+      width: 240px;
+    }
+    #controlPanel h3 {
+      margin: 0 0 6px;
+    }
+    #controlPanel p {
+      margin: 4px 0;
+      font-size: 0.85em;
+      color: #ccc;
+    }
+    #controlPanel label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    #controlPanel input[type="range"] {
+      width: 100%;
+    }
+    #controlPanel button {
+      margin-top: 6px;
+      width: 100%;
+      padding: 6px;
+      background: #333;
+      color: #fff;
+      border: 1px solid #666;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #controlPanel button:hover {
+      background: #444;
+    }
+    #colonyStats {
+      margin-top: 6px;
+      font-size: 0.9em;
+      color: #afffaf;
+    }
+    /* Input for user wallet + button */
+    #walletInput {
+      width: 100%;
+      padding: 4px;
+      margin-top: 6px;
+      box-sizing: border-box;
+    }
+
+    /* The large world: 3000×2000 */
+    #antsContainer {
+      position: relative;
+      width: 3000px;
+      height: 2000px;
+      background: #1a1a1a;
+    }
+
+    /* Each ant is a small element with transitions for movement */
+    .ant {
+      position: absolute;
+      pointer-events: auto;
+      user-select: none;
+      font-size: 1.2rem;
+      transition: transform 1s;
+    }
+    .queen {
+      font-size: 2rem;
+      color: #f00;
+      font-weight: bold;
+    }
+    /* User-created ants can have a special color or style if you like */
+    .user-holder {
+      color: #55ff55 !important;
+    }
+
+    /* The nest, shown as a circular zone */
+    .nest {
+      position: absolute;
+      border: 2px dashed #ccc;
+      border-radius: 50%;
+      pointer-events: none;
+      opacity: 0.3;
+    }
+
+    /* Tooltip for addresses & categories */
+    .tooltip {
+      position: fixed;
+      background: #000;
+      color: #0f0;
+      padding: 4px 6px;
+      border: 1px solid #0f0;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      display: none;
+      pointer-events: none;
+      white-space: pre;
+      z-index: 10000;
+    }
+
+    /* Ant Info Panel (when user clicks an ant) */
+    #antInfoPanel {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      width: 200px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid #888;
+      border-radius: 6px;
+      padding: 10px;
+      display: none; /* hidden by default */
+      z-index: 9999;
+    }
+    #antInfoPanel h4 {
+      margin: 0 0 6px;
+      font-size: 1em;
+    }
+    #antInfoPanel p {
+      margin: 4px 0;
+      font-size: 0.85em;
+    }
+
+    /* Mini-Map container + canvas */
+    #miniMapContainer {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      width: 300px;
+      height: 200px;
+      background: #222;
+      border: 1px solid #555;
+      border-radius: 4px;
+      z-index: 9998;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #miniMapCanvas {
+      background: #333;
+      width: 290px;
+      height: 190px;
+      border: 1px solid #999;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Control Panel -->
+  <div id="controlPanel">
+    <h3>Ant Generator</h3>
+    <p>
+      Each ant represents a different holder wallet. 
+       
+      Enter your own wallet below to generate your unique ant!
+    </p>
+
+    <label>Speed
+      <input id="speedRange" type="range" min="0.1" max="2" step="0.1" value="0.5">
+    </label>
+
+    <input id="walletInput" type="text" placeholder="Enter your wallet address..." />
+    <button id="addMyAntBtn">Add My Ant</button>
+
+    <div id="colonyStats"></div>
+  </div>
+
+  <!-- The large “world” container for ants -->
+  <div id="antsContainer"></div>
+
+  <!-- The nest visually -->
+  <div class="nest" id="nestZone"></div>
+
+  <!-- Tooltip for addresses -->
+  <div class="tooltip" id="tooltip"></div>
+
+  <!-- Ant Info Panel (when user clicks an ant) -->
+  <div id="antInfoPanel">
+    <h4>Ant Info</h4>
+    <p id="infoCategory"></p>
+    <p id="infoAddress"></p>
+    <p id="infoBalance"></p>
+    <p id="infoTime"></p>
+  </div>
+
+  <!-- Mini-Map Container -->
+  <div id="miniMapContainer">
+    <canvas id="miniMapCanvas"></canvas>
+  </div>
+
+  <script>
+    /**************************************************
+     * 1) CONFIG: SIZES, NEST, ETC.
+     **************************************************/
+    const WORLD_WIDTH = 3000;
+    const WORLD_HEIGHT = 2000;
+
+    // Nest location & size:
+    const nestX = 1500;
+    const nestY = 1000;
+    const nestRadius = 150;
+
+    // For collisions & forces
+    const COLLISION_RADIUS = 30;
+    const BOUNCE_FORCE = 0.02;
+
+    // We'll spawn a few fake ants by default
+    const DEFAULT_FAKE_ANT_COUNT = 15; 
+
+    let ants = []; // array of { x, y, vx, vy, el, isQueen, isUser, category, address, balance, birthTime }
+    let queen = null;
+    let feedX = null;
+    let feedY = null;
+    let feedMode = false;
+    let feedTimer = null;
+
+    // references
+    const antsContainer = document.getElementById('antsContainer');
+    const nestZone      = document.getElementById('nestZone');
+    const tooltipEl     = document.getElementById('tooltip');
+    const colonyStats   = document.getElementById('colonyStats');
+
+    // For the stats panel
+    const antInfoPanel   = document.getElementById('antInfoPanel');
+    const infoCategory   = document.getElementById('infoCategory');
+    const infoAddress    = document.getElementById('infoAddress');
+    const infoBalance    = document.getElementById('infoBalance');
+    const infoTime       = document.getElementById('infoTime');
+
+    // Range input for speed
+    const speedRange   = document.getElementById('speedRange');
+
+    // Mini-map
+    const miniMapCanvas = document.getElementById('miniMapCanvas');
+    const mmCtx = miniMapCanvas.getContext('2d');
+    const mmWidth = miniMapCanvas.width;
+    const mmHeight = miniMapCanvas.height;
+
+    // For user input
+    const walletInput  = document.getElementById('walletInput');
+    const addMyAntBtn  = document.getElementById('addMyAntBtn');
+
+    // Categories for “fake” ants
+    const categories = [
+      { type: 'Early Holder', color: '#0f0' },
+      { type: 'Whale',        color: '#f0f' },
+      { type: 'Airdrop',      color: '#0ff' },
+      { type: 'Ordinary',     color: '#fff' }
+    ];
+
+    /**************************************************
+     * 2) UTILITY
+     **************************************************/
+    function randomRange(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+    function clamp(val, mn, mx) {
+      return Math.min(mx, Math.max(mn, val));
+    }
+    function distanceSq(ax, ay, bx, by) {
+      const dx = ax - bx;
+      const dy = ay - by;
+      return dx*dx + dy*dy;
+    }
+
+    // Fake Solana address generator (44 base58 chars)
+    function generateFakeSolAddress() {
+      const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+      let addr = '';
+      for (let i = 0; i < 44; i++) {
+        addr += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      return addr;
+    }
+    function getRandomBalance() {
+      return (Math.random() * (3.0 - 0.1) + 0.1).toFixed(2);
+    }
+    function formatTime(sec) {
+      let m = Math.floor(sec / 60);
+      let s = sec % 60;
+      return `${m}m ${s < 10 ? '0' : ''}${s}s`;
+    }
+
+    /**************************************************
+     * 3) CREATE / CLEAR ANTS + NEST
+     **************************************************/
+    function createAnt(isQueen=false, isUser=false, walletAddr="", catObj=null) {
+      const antEl = document.createElement('div');
+      antEl.className = 'ant';
+
+      let category;
+      if (isQueen) {
+        antEl.classList.add('queen');
+        category = { type: 'Queen', color: '#f00' };
+      } else if (isUser) {
+        // user ant has special style
+        antEl.classList.add('user-holder');
+        category = { type: 'User Ant', color: '#55ff55' };
+      } else {
+        category = catObj || categories[Math.floor(Math.random() * categories.length)];
+        antEl.style.color = category.color;
+      }
+
+      // random pos in big world
+      const x = randomRange(0, WORLD_WIDTH - 10);
+      const y = randomRange(0, WORLD_HEIGHT - 10);
+      const speedVal = parseFloat(speedRange.value);
+      const vx = randomRange(-speedVal, speedVal);
+      const vy = randomRange(-speedVal, speedVal);
+
+      // addresses
+      let address  = walletAddr ? walletAddr : generateFakeSolAddress();
+      let balance  = getRandomBalance();
+      const birthTime = Date.now();
+
+      // ASCII display
+      antEl.textContent = isQueen ? 'Q' : (isUser ? '@' : '.'); 
+
+      // Show tooltip on hover
+      antEl.addEventListener('mouseenter', (e) => {
+        showTooltip(e.clientX, e.clientY, category, address, balance);
+      });
+      antEl.addEventListener('mousemove', (e) => {
+        moveTooltip(e.clientX, e.clientY);
+      });
+      antEl.addEventListener('mouseleave', () => {
+        hideTooltip();
+      });
+
+      // On click -> open stats panel
+      antEl.addEventListener('click', (e) => {
+        e.stopPropagation(); // so we don't place feed
+        openAntInfoPanel(category, address, balance, birthTime);
+      });
+
+      antsContainer.appendChild(antEl);
+
+      return {
+        x, y, vx, vy,
+        el: antEl,
+        isQueen,
+        isUser,
+        category,
+        address,
+        balance,
+        birthTime
+      };
+    }
+
+    function spawnFakeColony() {
+      // spawn 1 queen
+      const queenAnt = createAnt(true, false, "", null);
+      ants.push(queenAnt);
+      queen = queenAnt;
+
+      // spawn the rest
+      for (let i = 1; i < DEFAULT_FAKE_ANT_COUNT; i++) {
+        ants.push(createAnt(false, false, "", null));
+      }
+    }
+
+    function addUserAnt(walletAddr) {
+      // Create user-specified ant
+      const userAnt = createAnt(false, true, walletAddr, null);
+      ants.push(userAnt);
+    }
+
+    function clearAllAnts() {
+      ants.forEach(a => {
+        antsContainer.removeChild(a.el);
+      });
+      ants = [];
+      queen = null;
+    }
+
+    function setupNest() {
+      // Position & size
+      nestZone.style.left   = (nestX - nestRadius) + 'px';
+      nestZone.style.top    = (nestY - nestRadius) + 'px';
+      nestZone.style.width  = (nestRadius * 2) + 'px';
+      nestZone.style.height = (nestRadius * 2) + 'px';
+    }
+
+    /**************************************************
+     * 4) UPDATE (COLLISIONS, MOVEMENT, ETC.)
+     **************************************************/
+    function updateAnts() {
+      for (let i = 0; i < ants.length; i++) {
+        const a = ants[i];
+
+        if (feedMode && feedX !== null && feedY !== null) {
+          // feed
+          const dx = feedX - a.x;
+          const dy = feedY - a.y;
+          a.vx += dx * 0.0002;
+          a.vy += dy * 0.0002;
+        } else if (!a.isQueen) {
+          // not queen -> small attraction to nest
+          let dx = nestX - a.x;
+          let dy = nestY - a.y;
+          a.vx += dx * 0.00003;
+          a.vy += dy * 0.00003;
+
+          // also a minimal pull to the queen if no feed
+          if (!feedMode && queen) {
+            let dxQ = queen.x - a.x;
+            let dyQ = queen.y - a.y;
+            a.vx += dxQ * 0.00001;
+            a.vy += dyQ * 0.00001;
+          }
+        }
+
+        // Move
+        a.x += a.vx;
+        a.y += a.vy;
+
+        // bounce in big world
+        if (a.x < 0 || a.x > WORLD_WIDTH - 10) {
+          a.vx *= -1;
+        }
+        if (a.y < 0 || a.y > WORLD_HEIGHT - 10) {
+          a.vy *= -1;
+        }
+        a.x = clamp(a.x, 0, WORLD_WIDTH - 10);
+        a.y = clamp(a.y, 0, WORLD_HEIGHT - 10);
+      }
+
+      // Collisions
+      for (let i = 0; i < ants.length; i++) {
+        for (let j = i+1; j < ants.length; j++) {
+          const dx = ants[j].x - ants[i].x;
+          const dy = ants[j].y - ants[i].y;
+          const distSq = dx*dx + dy*dy;
+          if (distSq < COLLISION_RADIUS * COLLISION_RADIUS) {
+            const dist = Math.sqrt(distSq) || 1;
+            const pushX = (dx/dist) * BOUNCE_FORCE;
+            const pushY = (dy/dist) * BOUNCE_FORCE;
+            ants[i].vx -= pushX;
+            ants[i].vy -= pushY;
+            ants[j].vx += pushX;
+            ants[j].vy += pushY;
+          }
+        }
+      }
+
+      // Apply transform
+      ants.forEach(a => {
+        a.el.style.transform = `translate(${a.x}px, ${a.y}px)`;
+      });
+    }
+
+    /**************************************************
+     * 5) ANIMATION LOOP & MINIMAP
+     **************************************************/
+    function animate() {
+      updateAnts();
+      drawMiniMap();
+      requestAnimationFrame(animate);
+    }
+
+    function drawMiniMap() {
+      // Clear canvas
+      mmCtx.clearRect(0, 0, mmWidth, mmHeight);
+
+      const scaleX = mmWidth / WORLD_WIDTH;
+      const scaleY = mmHeight / WORLD_HEIGHT;
+
+      // draw nest
+      mmCtx.strokeStyle = '#ccc';
+      mmCtx.beginPath();
+      mmCtx.arc(nestX * scaleX, nestY * scaleY, nestRadius * scaleX, 0, 2*Math.PI);
+      mmCtx.stroke();
+
+      // draw ants
+      ants.forEach(a => {
+        const mx = a.x * scaleX;
+        const my = a.y * scaleY;
+        if (a.isQueen) {
+          mmCtx.fillStyle = '#ff0000';
+        } else if (a.isUser) {
+          mmCtx.fillStyle = '#55ff55';
+        } else {
+          mmCtx.fillStyle = a.category?.color || '#ffffff';
+        }
+        mmCtx.beginPath();
+        mmCtx.arc(mx, my, 2, 0, 2*Math.PI);
+        mmCtx.fill();
+      });
+    }
+
+    /**************************************************
+     * 6) TOOLTIP
+     **************************************************/
+    function showTooltip(x, y, category, address, balance) {
+      tooltipEl.innerText = `${category.type}\nAddr: ${address}\nBal: ${balance} SOL`;
+      tooltipEl.style.display = 'block';
+      tooltipEl.style.left = (x + 10) + 'px';
+      tooltipEl.style.top  = (y + 10) + 'px';
+    }
+    function moveTooltip(x, y) {
+      tooltipEl.style.left = (x + 10) + 'px';
+      tooltipEl.style.top  = (y + 10) + 'px';
+    }
+    function hideTooltip() {
+      tooltipEl.style.display = 'none';
+    }
+
+    /**************************************************
+     * 7) STATS PANEL ON CLICK
+     **************************************************/
+    function openAntInfoPanel(cat, address, balance, birthTime) {
+      antInfoPanel.style.display = 'block';
+      document.getElementById('infoCategory').textContent = `Category: ${cat.type}`;
+      document.getElementById('infoAddress').textContent  = `Address: ${address}`;
+      document.getElementById('infoBalance').textContent  = `Balance: ${balance} SOL`;
+
+      const ageSec = Math.floor((Date.now() - birthTime) / 1000);
+      document.getElementById('infoTime').textContent = `Time in colony: ${formatTime(ageSec)}`;
+    }
+
+    // Close the info panel if the user clicks anywhere else
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.ant')) {
+        return;
+      }
+      if (!e.target.closest('#antInfoPanel')) {
+        antInfoPanel.style.display = 'none';
+      }
+    }, true);
+
+    /**************************************************
+     * 8) FEED MODE: CLICK ANYWHERE
+     **************************************************/
+    antsContainer.addEventListener('click', (e) => {
+      // offset in container coords
+      const rect = antsContainer.getBoundingClientRect();
+      feedX = e.clientX - rect.x;
+      feedY = e.clientY - rect.y;
+      feedMode = true;
+
+      if (feedTimer) clearTimeout(feedTimer);
+      feedTimer = setTimeout(() => {
+        feedMode = false;
+        feedX = null;
+        feedY = null;
+      }, 5000);
+    });
+
+    /**************************************************
+     * 9) UI EVENTS
+     **************************************************/
+    function updateStats() {
+      colonyStats.textContent = `Ants: ${ants.length}, Speed: ${speedRange.value}`;
+    }
+
+    addMyAntBtn.addEventListener('click', () => {
+      const userWallet = walletInput.value.trim();
+      if (!userWallet) {
+        alert("Please enter a wallet address!");
+        return;
+      }
+      addUserAnt(userWallet);
+      updateStats();
+      walletInput.value = "";
+    });
+
+    speedRange.addEventListener('input', updateStats);
+
+    /**************************************************
+     * 10) INIT
+     **************************************************/
+    function init() {
+      setupNest();
+
+      // spawn default fake colony (some random ants + queen)
+      spawnFakeColony();
+
+      updateStats();
+      animate(); // start the loop
+    }
+
+    init();
+  </script>
+</body>
+</html>
